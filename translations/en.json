@@ -1,6 +1,5 @@
 {
-  "greeting": "👋🏻 <b>Hello</b>\nThis is a bot for connecting to <b>VPN</b>🛡️\n\nAvailable locations:\n Location 1\n Location 2\n\n<b>How to connect:</b>\n• click the <b>Connect</b> button\n• follow the short instructions",
-  "buy_button": "💰 Buy",
+  "greeting": "📋 <b>VPN WRMHL Usage Rules</b>\n\n1. It is prohibited to use the service for any illegal activities\n2. Distribution of pirated or malicious content is strictly prohibited\n3. Spam and phishing are not allowed\n4. Using the service for DDoS attacks is forbidden\n5. One account is intended for one user only\n6. Refunds are possible only in exceptional cases\n7. The administration reserves the right to block an account in case of rule violations\n\nBy using the service, you confirm your agreement with these rules.\n\n<b>Available locations:</b>\n\n• 🇳🇱 <b>Damnsterdam</b> (Netherlands) — the fastest and most popular option.\n• 🇫🇮 <b>VanHelsinki</b> (Finland) — stable connection and good privacy.\n• 🇨🇦 <b>Canaduhhh</b> (Canada) — a reliable choice for everyday use.\n• 🇩🇪 <b>Berlin Transit</b> (RU → DE) — Russian sites see you as being in Russia, the rest of the world sees Germany.\n• 🇹🇷 <b>Kebab</b> (Turkey) — in case you need a Turkish IP.\n• 🇯🇵 <b>Japan</b> (Japan) — a VERY Far East.",  "buy_button": "💰 Buy",
   "connect_button": "🔌 Connect",
   "back_button": "🔙 Back",
   "pricing_info": "Russian bank cards and cryptocurrency are accepted for payment",
