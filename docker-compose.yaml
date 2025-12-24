@@ -30,8 +30,33 @@ services:
       interval: 3s
       timeout: 10s
       retries: 3
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: bot-pgadmin
+    restart: unless-stopped
+    depends_on:
+      bot-db:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "True"
+      TZ: UTC
+    ports:
+      - "127.0.0.1:5050:80"
+    volumes:
+      - bot-pgadmin-data:/var/lib/pgadmin
+    security_opt:
+      - no-new-privileges:true
 volumes:
   remnawave-telegram-shop-db-data:
     driver: local
     external: false
     name: remnawave-telegram-shop-db-data
+
+  bot-pgadmin-data:
+    driver: local
+    external: false
+    name: bot-pgadmin-data
