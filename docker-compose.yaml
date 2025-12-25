@@ -44,8 +44,8 @@ services:
       PGADMIN_CONFIG_SERVER_MODE: "True"
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "True"
       TZ: UTC
-    ports:
-      - "5050:80"
+    # ports:
+    #  - "5050:80"
     volumes:
       - bot-pgadmin-data:/var/lib/pgadmin
     security_opt:
