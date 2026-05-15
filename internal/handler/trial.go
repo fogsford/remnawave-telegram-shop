@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"remnawave-tg-shop-bot/internal/config"
+	"remnawave-tg-shop-bot/internal/remnawave"
 	"remnawave-tg-shop-bot/utils"
 )
 
@@ -35,8 +36,8 @@ func (h Handler) TrialCallbackHandler(ctx context.Context, b *bot.Bot, update *m
 		Text:      h.translation.GetText(langCode, "trial_text"),
 		ParseMode: models.ParseModeHTML,
 		ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-			{{Text: h.translation.GetText(langCode, "activate_trial_button"), CallbackData: CallbackActivateTrial}},
-			{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}},
+			{h.translation.GetButton(langCode, "activate_trial_button").InlineCallback(CallbackActivateTrial)},
+			{h.translation.GetButton(langCode, "back_button").InlineCallback(CallbackStart)},
 		}},
 	})
 	if err != nil {
@@ -61,8 +62,12 @@ func (h Handler) ActivateTrialCallbackHandler(ctx context.Context, b *bot.Bot, u
 		return
 	}
 	callback := update.CallbackQuery.Message.Message
-	ctxWithUsername := context.WithValue(ctx, "username", update.CallbackQuery.From.Username)
+	ctxWithUsername := context.WithValue(ctx, remnawave.CtxKeyUsername, update.CallbackQuery.From.Username)
 	_, err = h.paymentService.ActivateTrial(ctxWithUsername, update.CallbackQuery.From.ID)
+	if err != nil {
+		slog.Error("Error activating trial", "error", err)
+		return
+	}
 	langCode := update.CallbackQuery.From.LanguageCode
 	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:      callback.Chat.ID,
@@ -81,7 +86,7 @@ func (h Handler) createConnectKeyboard(lang string) [][]models.InlineKeyboardBut
 	inlineCustomerKeyboard = append(inlineCustomerKeyboard, h.resolveConnectButton(lang))
 
 	inlineCustomerKeyboard = append(inlineCustomerKeyboard, []models.InlineKeyboardButton{
-		{Text: h.translation.GetText(lang, "back_button"), CallbackData: CallbackStart},
+		h.translation.GetButton(lang, "back_button").InlineCallback(CallbackStart),
 	})
 	return inlineCustomerKeyboard
 }

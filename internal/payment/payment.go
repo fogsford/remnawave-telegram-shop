@@ -10,6 +10,7 @@ import (
 	"remnawave-tg-shop-bot/internal/cryptopay"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/moynalog"
+	"remnawave-tg-shop-bot/internal/platega"
 	"remnawave-tg-shop-bot/internal/remnawave"
 	"remnawave-tg-shop-bot/internal/translation"
 	"remnawave-tg-shop-bot/internal/yookasa"
@@ -28,6 +29,7 @@ type PaymentService struct {
 	translation        *translation.Manager
 	cryptoPayClient    *cryptopay.Client
 	yookasaClient      *yookasa.Client
+	plategaClient      *platega.Client
 	referralRepository *database.ReferralRepository
 	cache              *cache.Cache
 	moynalogClient     *moynalog.Client
@@ -41,6 +43,7 @@ func NewPaymentService(
 	telegramBot *bot.Bot,
 	cryptoPayClient *cryptopay.Client,
 	yookasaClient *yookasa.Client,
+	plategaClient *platega.Client,
 	referralRepository *database.ReferralRepository,
 	cache *cache.Cache,
 	moynalogClient *moynalog.Client,
@@ -53,6 +56,7 @@ func NewPaymentService(
 		translation:        translation,
 		cryptoPayClient:    cryptoPayClient,
 		yookasaClient:      yookasaClient,
+		plategaClient:      plategaClient,
 		referralRepository: referralRepository,
 		cache:              cache,
 		moynalogClient:     moynalogClient,
@@ -117,30 +121,23 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		return err
 	}
 
-	slog.Info("checking conditions for Moynalog receipt", "invoice_type", purchase.InvoiceType, "moynalog_client", s.moynalogClient != nil)
 	if purchase.InvoiceType == database.InvoiceTypeYookasa && s.moynalogClient != nil {
-		slog.Info("attempting to send receipt to Moynalog", "purchase_id", utils.MaskHalfInt64(purchase.ID), "amount", purchase.Amount, "month", purchase.Month)
 		go func() {
-			err := s.sendReceiptToMoynalog(purchase)
-			if err != nil {
-				slog.Error("error sending receipt to Moynalog", "error", err, "purchase_id", utils.MaskHalfInt64(purchase.ID))
-				_, err = s.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
+			moynalogCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if err := s.sendReceiptToMoynalog(moynalogCtx, purchase); err != nil {
+				slog.Error("send receipt to Moynalog", "error", err, "purchase_id", utils.MaskHalfInt64(purchase.ID))
+				_, sendErr := s.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
 					ChatID: config.GetAdminTelegramId(),
-					Text:   "Ошибка при отправки чека в Мой налог. Проверье логи.",
+					Text:   "Ошибка при отправке чека в Мой налог. Проверьте логи.",
 				})
-				if err != nil {
-					slog.Error("error while sending moy nalog error message", "error", err, "purchase_id", utils.MaskHalfInt64(purchase.ID))
+				if sendErr != nil {
+					slog.Error("notify admin about Moynalog failure", "error", sendErr, "purchase_id", utils.MaskHalfInt64(purchase.ID))
 				}
-			} else {
-				slog.Info("successfully sent receipt to Moynalog", "purchase_id", utils.MaskHalfInt64(purchase.ID))
+				return
 			}
+			slog.Info("Moynalog receipt sent", "purchase_id", utils.MaskHalfInt64(purchase.ID))
 		}()
-	} else {
-		if purchase.InvoiceType != database.InvoiceTypeYookasa {
-			slog.Info("not sending receipt to Moynalog - not a Yookasa invoice", "invoice_type", purchase.InvoiceType, "purchase_id", utils.MaskHalfInt64(purchase.ID))
-		} else if s.moynalogClient == nil {
-			slog.Error("not sending receipt to Moynalog - client is nil", "purchase_id", utils.MaskHalfInt64(purchase.ID))
-		}
 	}
 
 	ctxReferee := context.Background()
@@ -163,8 +160,8 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		return err
 	}
 	refereeUserFilesToUpdate := map[string]interface{}{
-		"subscription_link": refereeUser.GetSubscriptionUrl(),
-		"expire_at":         refereeUser.GetExpireAt(),
+		"subscription_link": refereeUser.SubscriptionUrl,
+		"expire_at":         refereeUser.ExpireAt,
 	}
 	err = s.customerRepository.UpdateFields(ctxReferee, refereeCustomer.ID, refereeUserFilesToUpdate)
 	if err != nil {
@@ -192,20 +189,15 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 func (s PaymentService) createConnectKeyboard(customer *database.Customer) [][]models.InlineKeyboardButton {
 	var inlineCustomerKeyboard [][]models.InlineKeyboardButton
 
+	bd := s.translation.GetButton(customer.Language, "connect_button")
 	if config.GetMiniAppURL() != "" {
-		inlineCustomerKeyboard = append(inlineCustomerKeyboard, []models.InlineKeyboardButton{
-			{Text: s.translation.GetText(customer.Language, "connect_button"), WebApp: &models.WebAppInfo{
-				URL: config.GetMiniAppURL(),
-			}},
-		})
+		inlineCustomerKeyboard = append(inlineCustomerKeyboard, []models.InlineKeyboardButton{bd.InlineWebApp(config.GetMiniAppURL())})
 	} else {
-		inlineCustomerKeyboard = append(inlineCustomerKeyboard, []models.InlineKeyboardButton{
-			{Text: s.translation.GetText(customer.Language, "connect_button"), CallbackData: "connect"},
-		})
+		inlineCustomerKeyboard = append(inlineCustomerKeyboard, []models.InlineKeyboardButton{bd.InlineCallback("connect")})
 	}
 
 	inlineCustomerKeyboard = append(inlineCustomerKeyboard, []models.InlineKeyboardButton{
-		{Text: s.translation.GetText(customer.Language, "back_button"), CallbackData: "start"},
+		s.translation.GetButton(customer.Language, "back_button").InlineCallback("start"),
 	})
 	return inlineCustomerKeyboard
 }
@@ -220,9 +212,61 @@ func (s PaymentService) CreatePurchase(ctx context.Context, amount float64, mont
 		return s.createTelegramInvoice(ctx, amount, months, customer)
 	case database.InvoiceTypeTribute:
 		return s.createTributeInvoice(ctx, amount, months, customer)
+	case database.InvoiceTypePlategaSBP,
+		database.InvoiceTypePlategaCards,
+		database.InvoiceTypePlategaAcquiring,
+		database.InvoiceTypePlategaWorldwide,
+		database.InvoiceTypePlategaCrypto:
+		return s.createPlategaInvoice(ctx, amount, months, customer, invoiceType)
 	default:
 		return "", 0, fmt.Errorf("unknown invoice type: %s", invoiceType)
 	}
+}
+
+func (s PaymentService) createPlategaInvoice(ctx context.Context, amount float64, months int, customer *database.Customer, invoiceType database.InvoiceType) (url string, purchaseId int64, err error) {
+	if s.plategaClient == nil {
+		return "", 0, fmt.Errorf("platega client not configured")
+	}
+
+	provider, err := platega.ProviderFor(s.plategaClient, invoiceType)
+	if err != nil {
+		return "", 0, err
+	}
+
+	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
+		InvoiceType: invoiceType,
+		Status:      database.PurchaseStatusNew,
+		Amount:      amount,
+		Currency:    "RUB",
+		CustomerID:  customer.ID,
+		Month:       months,
+	})
+	if err != nil {
+		slog.Error("Error creating purchase", "error", err)
+		return "", 0, err
+	}
+
+	redirectURL, transactionID, err := provider.CreateInvoice(
+		ctx, purchaseId, amount, "RUB",
+		utils.FormatSubscriptionDescription(months),
+		config.BotURL(),
+	)
+	if err != nil {
+		slog.Error("Error creating platega invoice", "error", err, "invoice_type", invoiceType)
+		return "", 0, err
+	}
+
+	updates := map[string]interface{}{
+		"platega_id":  transactionID,
+		"platega_url": redirectURL,
+		"status":      database.PurchaseStatusPending,
+	}
+	if err := s.purchaseRepository.UpdateFields(ctx, purchaseId, updates); err != nil {
+		slog.Error("Error updating purchase", "error", err)
+		return "", 0, err
+	}
+
+	return redirectURL, purchaseId, nil
 }
 
 var ErrCustomerNotFound = errors.New("customer not found")
@@ -290,7 +334,7 @@ func (s PaymentService) createCryptoInvoice(ctx context.Context, amount float64,
 		Fiat:           "RUB",
 		Amount:         fmt.Sprintf("%d", int(amount)),
 		AcceptedAssets: "USDT",
-		Payload:        fmt.Sprintf("purchaseId=%d&username=%s", purchaseId, ctx.Value("username")),
+		Payload:        fmt.Sprintf("purchaseId=%d&username=%s", purchaseId, remnawave.UsernameFromCtx(ctx)),
 		Description:    fmt.Sprintf("Subscription on %d month", months),
 		PaidBtnName:    "callback",
 		PaidBtnUrl:     config.BotURL(),
@@ -374,7 +418,7 @@ func (s PaymentService) createTelegramInvoice(ctx context.Context, amount float6
 			},
 		},
 		Description: s.translation.GetText(customer.Language, "invoice_description"),
-		Payload:     fmt.Sprintf("%d&%s", purchaseId, ctx.Value("username")),
+		Payload:     fmt.Sprintf("%d&%s", purchaseId, remnawave.UsernameFromCtx(ctx)),
 	})
 
 	updates := map[string]interface{}{
@@ -409,8 +453,8 @@ func (s PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (st
 	}
 
 	customerFilesToUpdate := map[string]interface{}{
-		"subscription_link": user.GetSubscriptionUrl(),
-		"expire_at":         user.GetExpireAt(),
+		"subscription_link": user.SubscriptionUrl,
+		"expire_at":         user.ExpireAt,
 	}
 
 	err = s.customerRepository.UpdateFields(ctx, customer.ID, customerFilesToUpdate)
@@ -418,7 +462,7 @@ func (s PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (st
 		return "", err
 	}
 
-	return user.GetSubscriptionUrl(), nil
+	return user.SubscriptionUrl, nil
 
 }
 
@@ -462,7 +506,7 @@ func (s PaymentService) createTributeInvoice(ctx context.Context, amount float64
 	return "", purchaseId, nil
 }
 
-func (s PaymentService) sendReceiptToMoynalog(purchase *database.Purchase) error {
+func (s PaymentService) sendReceiptToMoynalog(ctx context.Context, purchase *database.Purchase) error {
 	if s.moynalogClient == nil {
 		return fmt.Errorf("moynalog client not initialized")
 	}
@@ -479,7 +523,7 @@ func (s PaymentService) sendReceiptToMoynalog(purchase *database.Purchase) error
 	comment := fmt.Sprintf("Подписка на %d %s", purchase.Month, monthString)
 	amount := purchase.Amount
 
-	_, err := s.moynalogClient.CreateIncome(amount, comment)
+	_, err := s.moynalogClient.CreateIncome(ctx, amount, comment)
 	if err != nil {
 		return fmt.Errorf("failed to create income in Moynalog: %w", err)
 	}

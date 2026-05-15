@@ -113,6 +113,8 @@ The application requires the following environment variables to be set:
 | `TRIBUTE_WEBHOOK_URL`    | Path for webhook handler. Example: /example (https://www.uuidgenerator.net/version4)                                                       |
 | `TRIBUTE_API_KEY`        | Api key, which can be obtained via settings in Tribute app.                                                                                |
 | `TRIBUTE_PAYMENT_URL`    | You payment url for Tribute. (Subscription telegram link)                                                                                  |
+| `TELEGRAM_PROXY_URL`     | Proxy URL for Telegram Bot API requests (optional, e.g., `socks5://host:port` or `http://host:port`)                                      |
+| `MOYNALOG_PROXY_URL`     | Proxy URL for Moy Nalog API requests (optional, e.g., `socks5://host:port` or `http://host:port`)                                         |
 
 ## User Interface
 
@@ -318,10 +320,10 @@ consider donating. Your support helps drive future updates and improvements.
 
 **Donation Methods:**
 
-- **Bep20 USDT:** `0x4D1ee2445fdC88fA49B9d02FB8ee3633f45Bef48`
+- **Bep20 USDT:** `0x843ff093ec36d45db5e21bca80b5bc315d03a433`
 
-- **SOL Solana:** `HNQhe6SCoU5UDZicFKMbYjQNv9Muh39WaEWbZayQ9Nn8`
+- **SOL Solana:** `8eXDeyZAqnq8nENtooMNSVExWJ1eq6J9nDDmjC9NJza7`
 
-- **TRC20 USDT:** `TBJrguLia8tvydsQ2CotUDTYtCiLDA4nPW`
+- **TRC20 USDT:** `TW7f4B4isWCn1QHdnrNG8CZ66cMffAMgN3`
 
-- **TON USDT:** `UQAdAhVxOr9LS07DDQh0vNzX2575Eu0eOByjImY1yheatXgr`
+- **TON USDT:** `UQALE1A_KMyWAYKuIugEFUMC_H0bTOMmrEyMKBUJ8oyRUCug`

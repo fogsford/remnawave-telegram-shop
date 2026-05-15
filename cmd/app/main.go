@@ -6,6 +6,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"remnawave-tg-shop-bot/internal/cache"
@@ -16,6 +17,7 @@ import (
 	"remnawave-tg-shop-bot/internal/moynalog"
 	"remnawave-tg-shop-bot/internal/notification"
 	"remnawave-tg-shop-bot/internal/payment"
+	"remnawave-tg-shop-bot/internal/platega"
 	"remnawave-tg-shop-bot/internal/remnawave"
 	"remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
@@ -48,7 +50,7 @@ func main() {
 	var moynalogClient *moynalog.Client
 	if config.IsMoynalogEnabled() {
 		var err error
-		moynalogClient, err = moynalog.NewClient(config.MoynalogUrl(), config.MoynalogUsername(), config.MoynalogPassword())
+		moynalogClient, err = moynalog.NewClient(config.MoynalogUrl(), config.MoynalogUsername(), config.MoynalogPassword(), config.MoynalogProxyURL())
 		if err != nil {
 			log.Fatalf("Moynalog initialization error: %v", err)
 		}
@@ -79,14 +81,28 @@ func main() {
 	cryptoPayClient := cryptopay.NewCryptoPayClient(config.CryptoPayUrl(), config.CryptoPayToken())
 	remnawaveClient := remnawave.NewClient(config.RemnawaveUrl(), config.RemnawaveToken(), config.RemnawaveMode())
 	yookasaClient := yookasa.NewClient(config.YookasaUrl(), config.YookasaShopId(), config.YookasaSecretKey())
-	b, err := bot.New(config.TelegramToken(), bot.WithWorkers(3))
+	plategaClient := platega.NewClient(config.PlategaMerchantId(), config.PlategaSecret())
+	botOpts := []bot.Option{bot.WithWorkers(3)}
+	if proxyStr := config.TelegramProxyURL(); proxyStr != "" {
+		proxyURL, parseErr := url.Parse(proxyStr)
+		if parseErr != nil {
+			panic(fmt.Sprintf("invalid TELEGRAM_PROXY_URL: %v", parseErr))
+		}
+		proxyClient := &http.Client{
+			Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+			Timeout:   30 * time.Second,
+		}
+		botOpts = append(botOpts, bot.WithHTTPClient(30*time.Second, proxyClient))
+		slog.Info("Telegram bot using proxy", "proxy", proxyURL.Host)
+	}
+	b, err := bot.New(config.TelegramToken(), botOpts...)
 	if err != nil {
 		panic(err)
 	}
 
-	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, cryptoPayClient, yookasaClient, referralRepository, cache, moynalogClient)
+	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, cryptoPayClient, yookasaClient, plategaClient, referralRepository, cache, moynalogClient)
 
-	cronScheduler := setupInvoiceChecker(purchaseRepository, cryptoPayClient, paymentService, yookasaClient)
+	cronScheduler := setupInvoiceChecker(purchaseRepository, cryptoPayClient, paymentService)
 	if cronScheduler != nil {
 		cronScheduler.Start()
 		defer cronScheduler.Stop()
@@ -137,14 +153,14 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/connect", bot.MatchTypeExact, h.ConnectCommandHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/sync", bot.MatchTypeExact, h.SyncUsersCommandHandler, isAdminMiddleware)
 
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackReferral, bot.MatchTypeExact, h.ReferralCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackBuy, bot.MatchTypeExact, h.BuyCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackTrial, bot.MatchTypeExact, h.TrialCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackActivateTrial, bot.MatchTypeExact, h.ActivateTrialCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackStart, bot.MatchTypeExact, h.StartCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackSell, bot.MatchTypePrefix, h.SellCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackConnect, bot.MatchTypeExact, h.ConnectCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackPayment, bot.MatchTypePrefix, h.PaymentCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackReferral, bot.MatchTypeExact, h.ReferralCallbackHandler, h.AnswerCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackBuy, bot.MatchTypeExact, h.BuyCallbackHandler, h.AnswerCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackTrial, bot.MatchTypeExact, h.TrialCallbackHandler, h.AnswerCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackActivateTrial, bot.MatchTypeExact, h.ActivateTrialCallbackHandler, h.AnswerCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackStart, bot.MatchTypeExact, h.StartCallbackHandler, h.AnswerCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackSell, bot.MatchTypePrefix, h.SellCallbackHandler, h.AnswerCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackConnect, bot.MatchTypeExact, h.ConnectCallbackHandler, h.AnswerCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackPayment, bot.MatchTypePrefix, h.PaymentCallbackHandler, h.AnswerCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
 	b.RegisterHandlerMatchFunc(func(update *models.Update) bool {
 		return update.PreCheckoutQuery != nil
 	}, h.PreCheckoutCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
@@ -158,6 +174,14 @@ func main() {
 	if config.GetTributeWebHookUrl() != "" {
 		tributeHandler := tribute.NewClient(paymentService, customerRepository)
 		mux.Handle(config.GetTributeWebHookUrl(), tributeHandler.WebHookHandler())
+	}
+	if config.IsYookasaEnabled() && config.GetYookasaWebHookUrl() != "" {
+		yookasaWebhook := yookasa.NewWebhookHandler(yookasaClient, paymentService, purchaseRepository)
+		mux.Handle(config.GetYookasaWebHookUrl(), yookasaWebhook)
+	}
+	if config.IsPlategaEnabled() && config.GetPlategaWebHookUrl() != "" {
+		plategaWebhook := platega.NewWebhookHandler(purchaseRepository, paymentService, config.PlategaMerchantId(), config.PlategaSecret())
+		mux.Handle(config.GetPlategaWebHookUrl(), plategaWebhook)
 	}
 
 	srv := &http.Server{
@@ -261,91 +285,22 @@ func initDatabase(ctx context.Context, connString string) (*pgxpool.Pool, error)
 func setupInvoiceChecker(
 	purchaseRepository *database.PurchaseRepository,
 	cryptoPayClient *cryptopay.Client,
-	paymentService *payment.PaymentService,
-	yookasaClient *yookasa.Client) *cron.Cron {
-	if !config.IsYookasaEnabled() && !config.IsCryptoPayEnabled() {
+	paymentService *payment.PaymentService) *cron.Cron {
+	if !config.IsCryptoPayEnabled() {
 		return nil
 	}
 	c := cron.New(cron.WithSeconds())
 
-	if config.IsCryptoPayEnabled() {
-		_, err := c.AddFunc("*/5 * * * * *", func() {
-			ctx := context.Background()
-			checkCryptoPayInvoice(ctx, purchaseRepository, cryptoPayClient, paymentService)
-		})
+	_, err := c.AddFunc("*/5 * * * * *", func() {
+		ctx := context.Background()
+		checkCryptoPayInvoice(ctx, purchaseRepository, cryptoPayClient, paymentService)
+	})
 
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	if config.IsYookasaEnabled() {
-		_, err := c.AddFunc("*/5 * * * * *", func() {
-			ctx := context.Background()
-			checkYookasaInvoice(ctx, purchaseRepository, yookasaClient, paymentService)
-		})
-
-		if err != nil {
-			panic(err)
-		}
+	if err != nil {
+		panic(err)
 	}
 
 	return c
-}
-
-func checkYookasaInvoice(
-	ctx context.Context,
-	purchaseRepository *database.PurchaseRepository,
-	yookasaClient *yookasa.Client,
-	paymentService *payment.PaymentService,
-) {
-	pendingPurchases, err := purchaseRepository.FindByInvoiceTypeAndStatus(
-		ctx,
-		database.InvoiceTypeYookasa,
-		database.PurchaseStatusPending,
-	)
-	if err != nil {
-		log.Printf("Error finding pending purchases: %v", err)
-		return
-	}
-	if len(*pendingPurchases) == 0 {
-		return
-	}
-
-	for _, purchase := range *pendingPurchases {
-
-		invoice, err := yookasaClient.GetPayment(ctx, *purchase.YookasaID)
-
-		if err != nil {
-			slog.Error("Error getting invoice", "invoiceId", purchase.YookasaID, "error", err)
-			continue
-		}
-
-		if invoice.IsCancelled() {
-			err := paymentService.CancelYookassaPayment(purchase.ID)
-			if err != nil {
-				slog.Error("Error canceling invoice", "invoiceId", invoice.ID, "purchaseId", purchase.ID, "error", err)
-			}
-			continue
-		}
-
-		if !invoice.Paid {
-			continue
-		}
-
-		purchaseId, err := strconv.Atoi(invoice.Metadata["purchaseId"])
-		if err != nil {
-			slog.Error("Error parsing purchaseId", "invoiceId", invoice.ID, "error", err)
-		}
-		ctxWithValue := context.WithValue(ctx, "username", invoice.Metadata["username"])
-		err = paymentService.ProcessPurchaseById(ctxWithValue, int64(purchaseId))
-		if err != nil {
-			slog.Error("Error processing invoice", "invoiceId", invoice.ID, "purchaseId", purchaseId, "error", err)
-		} else {
-			slog.Info("Invoice processed", "invoiceId", invoice.ID, "purchaseId", purchaseId)
-		}
-
-	}
 }
 
 func checkCryptoPayInvoice(
@@ -391,7 +346,7 @@ func checkCryptoPayInvoice(
 			payload := strings.Split(invoice.Payload, "&")
 			purchaseID, err := strconv.Atoi(strings.Split(payload[0], "=")[1])
 			username := strings.Split(payload[1], "=")[1]
-			ctxWithUsername := context.WithValue(ctx, "username", username)
+			ctxWithUsername := context.WithValue(ctx, remnawave.CtxKeyUsername, username)
 			err = paymentService.ProcessPurchaseById(ctxWithUsername, int64(purchaseID))
 			if err != nil {
 				slog.Error("Error processing invoice", "invoiceId", invoice.InvoiceID, "error", err)
