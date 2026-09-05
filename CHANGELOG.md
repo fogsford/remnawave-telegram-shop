@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.1] - 2026-08-31
+
+### Fixed
+- Preserve Remnawave validation details in API errors instead of logging an empty error code, making invalid create/update fields diagnosable.
+- Prefer the bot-managed panel user when multiple users share a Telegram ID during `/sync`, preventing an unrelated subscription from being selected.
+- Warn about duplicate Telegram IDs during synchronization while keeping Telegram IDs masked in logs.
+
+### Tests
+- Added regression coverage for Remnawave validation error parsing and duplicate-user selection during synchronization.
+
+## [5.0.0] - 2026-08-31
+
+### Changed
+- Migrated Remnawave API client to v3.4.1:
+  - User lookup by Telegram ID now uses the `telegramId` filter of `GET /api/users/stream` (the legacy `/api/users/by-telegram-id` endpoint was removed)
+  - User updates are sent by numeric `id` instead of `uuid` (`PATCH /api/users` requires exactly one of `id`/`username` since v3)
+  - `telegramId`/`description` in create and update bodies remain scalar values per the real v3.4.1 contract (the published openapi.json incorrectly declares them as arrays)
+
 ## [3.4.1] - 2025-11-08
 
 ### Added

@@ -3,6 +3,8 @@ package remnawave
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -118,7 +120,14 @@ func (r *Client) doRequest(ctx context.Context, method, path string, body any) (
 	if resp.StatusCode >= 400 {
 		var apiErr apiErrorResponse
 		if json.Unmarshal(respBody, &apiErr) == nil && apiErr.Message != "" {
-			return respBody, resp.StatusCode, fmt.Errorf("API error %d: %s (code: %s)", resp.StatusCode, apiErr.Message, apiErr.ErrorCode)
+			message := fmt.Sprintf("API error %d: %s", resp.StatusCode, apiErr.Message)
+			if apiErr.ErrorCode != "" {
+				message += fmt.Sprintf(" (code: %s)", apiErr.ErrorCode)
+			}
+			if details := strings.TrimSpace(string(apiErr.Errors)); details != "" && details != "null" && details != "[]" {
+				message += fmt.Sprintf(" (details: %s)", details)
+			}
+			return respBody, resp.StatusCode, errors.New(message)
 		}
 		return respBody, resp.StatusCode, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -144,8 +153,7 @@ func (r *Client) doJSON(ctx context.Context, method, path string, body, result a
 // ---------------------------------------------------------------------------
 
 func (r *Client) Ping(ctx context.Context) error {
-	path := fmt.Sprintf("/api/users?size=%d&start=%d", 1, 0)
-	return r.doJSON(ctx, http.MethodGet, path, nil, nil)
+	return r.doJSON(ctx, http.MethodGet, "/api/system/health", nil, nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +173,7 @@ func (r *Client) GetUsers(ctx context.Context) ([]User, error) {
 
 		users = append(users, page.Response.Users...)
 
-		if len(page.Response.Users) < pageSize {
+		if len(page.Response.Users) < pageSize || len(users) >= page.Response.Total {
 			break
 		}
 	}
@@ -177,13 +185,44 @@ func (r *Client) GetUsers(ctx context.Context) ([]User, error) {
 // Users — get by Telegram ID
 // ---------------------------------------------------------------------------
 
+// getUsersByTelegramID fetches panel users by Telegram ID via /api/users/stream.
 func (r *Client) getUsersByTelegramID(ctx context.Context, telegramID int64) ([]User, error) {
-	var resp apiResponse[[]User]
-	err := r.doJSON(ctx, http.MethodGet, "/api/users/by-telegram-id/"+strconv.FormatInt(telegramID, 10), nil, &resp)
-	if err != nil {
-		return nil, err
+	var users []User
+	cursor := ""
+	for page := 0; page < 100; page++ { // 100 pages is a safety bound
+		path := fmt.Sprintf("/api/users/stream?size=250&telegramId=%d", telegramID)
+		if cursor != "" {
+			path += "&cursor=" + cursor
+		}
+		var resp apiResponse[getUsersStreamResponse]
+		if err := r.doJSON(ctx, http.MethodGet, path, nil, &resp); err != nil {
+			return nil, err
+		}
+		users = append(users, resp.Response.Users...)
+		if !resp.Response.HasMore {
+			break
+		}
+		cursor = streamCursor(resp.Response.NextCursor)
+		if cursor == "" {
+			break
+		}
 	}
-	return resp.Response, nil
+	return users, nil
+}
+
+// streamCursor parses a raw nextCursor (JSON string or number) into a query value.
+func streamCursor(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return ""
+	}
+	if unquoted, err := strconv.Unquote(s); err == nil {
+		s = unquoted
+	}
+	if s == "" || s == "null" {
+		return ""
+	}
+	return s
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +329,7 @@ func (r *Client) updateUser(ctx context.Context, existingUser *User, trafficLimi
 	squadIds := filterSquadsBySelection(squads, selectedSquads)
 
 	userUpdate := &UpdateUserRequest{
-		UUID:                 &existingUser.UUID,
+		ID:                   &existingUser.ID,
 		ExpireAt:             &newExpire,
 		Status:               "ACTIVE",
 		TrafficLimitBytes:    &trafficLimit,
@@ -351,12 +390,11 @@ func (r *Client) createUser(ctx context.Context, customerId int64, telegramId in
 		strategy = config.TrialTrafficLimitResetStrategy()
 	}
 
-	tid := int(telegramId)
 	createReq := &CreateUserRequest{
 		Username:             username,
 		ActiveInternalSquads: squadIds,
 		Status:               "ACTIVE",
-		TelegramID:           &tid,
+		TelegramID:           &telegramId,
 		ExpireAt:             expireAt,
 		TrafficLimitStrategy: normalizeStrategy(strategy),
 		TrafficLimitBytes:    &trafficLimit,
@@ -389,8 +427,14 @@ func (r *Client) createUser(ctx context.Context, customerId int64, telegramId in
 // Utility functions
 // ---------------------------------------------------------------------------
 
+// Spec CreateUserRequestDto.username: pattern ^[a-zA-Z0-9_-]+$, 3..36 chars.
 func generateUsername(customerId int64, telegramId int64) string {
-	return fmt.Sprintf("%d_%d", customerId, telegramId)
+	u := fmt.Sprintf("%d_%d", customerId, telegramId)
+	if len(u) <= 36 {
+		return u
+	}
+	h := sha256.Sum256([]byte(u))
+	return "u_" + hex.EncodeToString(h[:16])
 }
 
 func getNewExpire(daysToAdd int, currentExpire time.Time) time.Time {
@@ -411,7 +455,7 @@ func getNewExpire(daysToAdd int, currentExpire time.Time) time.Time {
 func normalizeStrategy(s string) string {
 	upper := strings.ToUpper(s)
 	switch upper {
-	case "DAY", "WEEK", "NO_RESET", "MONTH":
+	case "NO_RESET", "DAY", "WEEK", "MONTH", "MONTH_ROLLING":
 		return upper
 	default:
 		return "MONTH"
