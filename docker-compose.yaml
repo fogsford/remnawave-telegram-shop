@@ -8,7 +8,8 @@ services:
         condition: service_healthy
     volumes:
       - ./translations:/translations
-
+    ports:
+      - "127.0.0.1:8080:8080"
   bot-db:
     image: postgres:17
     container_name: 'remnawave-telegram-shop-db'
@@ -50,6 +51,19 @@ services:
       - bot-pgadmin-data:/var/lib/pgadmin
     security_opt:
       - no-new-privileges:true
+
+  caddy:
+    image: caddy:2.9
+    container_name: 'caddy'
+    hostname: caddy
+    restart: always
+    ports:
+      - '0.0.0.0:8443:443'
+      - '0.0.0.0:80:80'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-ssl-data:/data
+      - ./logs:/var/log/caddy
 volumes:
   remnawave-telegram-shop-db-data:
     driver: local
@@ -60,3 +74,8 @@ volumes:
     driver: local
     external: false
     name: bot-pgadmin-data
+
+  caddy-ssl-data:
+    driver: local
+    external: false
+    name: caddy-ssl-data

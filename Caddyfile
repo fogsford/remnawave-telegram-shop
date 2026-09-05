@@ -1,0 +1,5 @@
+
+https://vpna-bot.wrmhl.fogsford.com {
+        reverse_proxy * http://bot:8080
+}
+
