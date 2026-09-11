@@ -1,15 +1,16 @@
 services:
   bot:
-    image: ghcr.io/jolymmiels/remnawave-telegram-shop-bot:latest
+    image: ghcr.io/jolymmiels/remnawave-telegram-shop-bot:5.0.1
     env_file:
       - .env
     depends_on:
-      db:
+      bot-db:
         condition: service_healthy
     volumes:
       - ./translations:/translations
-
-  db:
+    ports:
+      - "127.0.0.1:8080:8080"
+  bot-db:
     image: postgres:17
     container_name: 'remnawave-telegram-shop-db'
     hostname: remnawave-telegram-shop-db
@@ -22,7 +23,7 @@ services:
       - POSTGRES_DB=${POSTGRES_DB}
       - TZ=UTC
     ports:
-      - '127.0.0.1:5432:5432'
+      - '127.0.0.1:6768:5432'
     volumes:
       - remnawave-telegram-shop-db-data:/var/lib/postgresql/data
     healthcheck:
@@ -31,18 +32,50 @@ services:
       timeout: 10s
       retries: 3
 
-#  ngrok:
-#    image: ngrok/ngrok:latest
-#    command:
-#      - "http"
-#      - "http://bot:8080"
-#    environment:
-#      NGROK_AUTHTOKEN: TOKEN
-#    ports:
-#      - 4040:4040
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: bot-pgadmin
+    restart: unless-stopped
+    depends_on:
+      bot-db:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "True"
+      TZ: UTC
+    ports:
+      - "5050:80"
+    volumes:
+      - bot-pgadmin-data:/var/lib/pgadmin
+    security_opt:
+      - no-new-privileges:true
 
+  caddy:
+    image: caddy:2.9
+    container_name: 'caddy'
+    hostname: caddy
+    restart: always
+    ports:
+      - '0.0.0.0:8443:443'
+      - '0.0.0.0:80:80'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-ssl-data:/data
+      - ./logs:/var/log/caddy
 volumes:
   remnawave-telegram-shop-db-data:
     driver: local
     external: false
     name: remnawave-telegram-shop-db-data
+
+  bot-pgadmin-data:
+    driver: local
+    external: false
+    name: bot-pgadmin-data
+
+  caddy-ssl-data:
+    driver: local
+    external: false
+    name: caddy-ssl-data
